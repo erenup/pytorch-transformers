@@ -71,10 +71,14 @@ class InputFeatures(object):
         label: Label corresponding to the input
     """
 
-    def __init__(self, input_ids, attention_mask=None, token_type_ids=None, label=None):
+    def __init__(self, input_ids, attention_mask=None, token_type_ids=None, label=None, input_ids_a=None,
+                 attention_mask_a=None, token_type_ids_a=None):
         self.input_ids = input_ids
+        self.input_ids_a = input_ids_a
         self.attention_mask = attention_mask
+        self.attention_mask_a = attention_mask_a
         self.token_type_ids = token_type_ids
+        self.token_type_ids_a = token_type_ids_a
         self.label = label
 
     def __repr__(self):
@@ -342,6 +346,8 @@ class SingleSentenceClassificationProcessor(DataProcessor):
 
             all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
             all_attention_mask = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
+            all_input_ids_a = torch.tensor([f.input_ids_a for f in features], dtype=torch.long)
+            all_attention_mask_a = torch.tensor([f.attention_mask_a for f in features], dtype=torch.long)
             if self.mode == "classification":
                 all_labels = torch.tensor([f.label for f in features], dtype=torch.long)
             elif self.mode == "regression":

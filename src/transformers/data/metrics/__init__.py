@@ -73,7 +73,13 @@ if _has_sklearn:
         elif task_name == "wnli":
             return {"acc": simple_accuracy(preds, labels)}
         elif task_name == "hotpot":
-            return {"result": precision_recall_fscore_support(preds, labels)}
+            return {"result": precision_recall_fscore_support(y_pred=preds, y_true=labels)}
+        elif task_name == "hotpot_sf":
+            return {"result": precision_recall_fscore_support(y_pred=preds, y_true=labels)}
+        elif task_name == "hotpot_yes_no":
+            return {"result": precision_recall_fscore_support(y_pred=preds, y_true=labels)}
+        elif task_name == "hotpot_2nd":
+            return {"result": precision_recall_fscore_support(y_pred=preds, y_true=labels)}
         else:
             raise KeyError(task_name)
 

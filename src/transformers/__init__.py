@@ -217,6 +217,7 @@ if is_torch_available():
         RobertaForTokenClassification,
         RobertaForQuestionAnsweringHotpot,
         RobertaForQuestionAnswering,
+        RobertaForSequenceClassificationTri,
         ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP,
     )
     from .modeling_distilbert import (

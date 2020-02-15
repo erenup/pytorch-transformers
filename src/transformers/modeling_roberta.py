@@ -17,6 +17,7 @@
 
 
 import logging
+import random
 
 import torch
 import torch.nn as nn
@@ -401,6 +402,77 @@ class RobertaForSequenceClassification(BertPreTrainedModel):
         return outputs  # (loss), logits, (hidden_states), (attentions)
 
 
+class RobertaForSequenceClassificationTri(BertPreTrainedModel):
+    config_class = RobertaConfig
+    pretrained_model_archive_map = ROBERTA_PRETRAINED_MODEL_ARCHIVE_MAP
+    base_model_prefix = "roberta"
+
+    def __init__(self, config):
+        super(RobertaForSequenceClassificationTri, self).__init__(config)
+        self.num_labels = config.num_labels
+
+        self.roberta = RobertaModel(config)
+        self.classifier = RobertaClassificationHead(config)
+        self.triplet_loss = TripletLoss(margin=0.5)
+        self.tri_rate = config.tri_rate
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+    ):
+        device = input_ids.device if input_ids is not None else input_ids.device
+        outputs = self.roberta(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+        )
+        sequence_output = outputs[0]
+        pooled_output = outputs[1]
+        logits = self.classifier(sequence_output)
+
+        outputs = (logits,) + outputs[2:]
+        if labels is not None:
+            if self.num_labels == 1:
+                #  We are doing regression
+                loss_fct = MSELoss()
+                loss = loss_fct(logits.view(-1), labels.view(-1))
+            else:
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            positive_indices = labels > 0.5
+            negtive_indices = labels < 0.5
+            positive_outputs = pooled_output[positive_indices]
+            negtive_outputs = pooled_output[negtive_indices]
+            triplet_times = positive_outputs.size(0) // 2
+            if triplet_times > 0:
+                while triplet_times:
+                    positive_random_indices = torch.tensor(random.sample(list(range(positive_outputs.size(0))), 2),
+                                              device=device, dtype=torch.long, requires_grad=False)
+                    positive_embs = torch.index_select(positive_outputs, 0, positive_random_indices)
+
+                    negtive_random_indices = torch.tensor(random.sample(list(range(negtive_outputs.size(0))), 1),
+                                              device=device, dtype=torch.long, requires_grad=False)
+                    negative_emb = torch.index_select(negtive_outputs, 0, negtive_random_indices)
+                    triplet_loss = self.triplet_loss(anchor=positive_embs[0, :].unsqueeze(0),
+                                                     positive=positive_embs[1, :].unsqueeze(0), negative=negative_emb[0, :].unsqueeze(0), size_average=True)
+                    loss += self.tri_rate * triplet_loss
+                    triplet_times -= 1
+                    outputs = (loss, triplet_loss) + outputs
+            else:
+                outputs = (loss,) + outputs
+
+        return outputs  # (loss), logits, (hidden_states), (attentions)
+
+
 @add_start_docstrings(
     """Roberta Model with a multiple choice classification head on top (a linear layer on top of
     the pooled output and a softmax) e.g. for RocStories/SWAG tasks. """,
@@ -541,13 +613,16 @@ class TripletLoss(nn.Module):
     Takes embeddings of an anchor sample, a positive sample and a negative sample
     """
 
-    def __init__(self, margin = 1.0):
+    def __init__(self, margin=0.1):
         super(TripletLoss, self).__init__()
         self.margin = margin
 
     def forward(self, anchor, positive, negative, size_average=True):
-        distance_positive = (anchor - positive).pow(2).sum(1)  # .pow(.5)
-        distance_negative = (anchor - negative).pow(2).sum(1)  # .pow(.5)
+        anchor_normed = torch.nn.functional.normalize(anchor, p=2, dim=1)
+        positive_normed = torch.nn.functional.normalize(positive, p=2, dim=1)
+        negative_normed = torch.nn.functional.normalize(negative, p=2, dim=1)
+        distance_positive = (anchor_normed - positive_normed).pow(2).sum(1).pow(.5)
+        distance_negative = (anchor_normed - negative_normed).pow(2).sum(1).pow(.5)
         losses = torch.relu(distance_positive - distance_negative + self.margin)
         return losses.mean() if size_average else losses.sum()
 
@@ -562,9 +637,9 @@ class RobertaForTri(BertPreTrainedModel):
 
         self.roberta = RobertaModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, 1)
-        self.sigmoid = nn.Sigmoid()
-        self.triplet_loss = TripletLoss(margin=1.0)
+        self.classifier = nn.Linear(config.hidden_size * 2, 2)
+        self.triplet_loss = TripletLoss(margin=0.1)
+        self.tri_rate = config.tri_rate
 
         self.init_weights()
 
@@ -573,18 +648,21 @@ class RobertaForTri(BertPreTrainedModel):
         input_ids=None,
         token_type_ids=None,
         attention_mask=None,
+        input_ids_a=None,
+        token_type_ids_a=None,
+        attention_mask_a=None,
         labels=None,
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
     ):
+        device = input_ids.device if input_ids is not None else input_ids.device
         num_choices = input_ids.shape[1]
         batch_size = input_ids.size(0)
         flat_input_ids = input_ids.view(-1, input_ids.size(-1))
         flat_position_ids = position_ids.view(-1, position_ids.size(-1)) if position_ids is not None else None
         flat_token_type_ids = token_type_ids.view(-1, token_type_ids.size(-1)) if token_type_ids is not None else None
         flat_attention_mask = attention_mask.view(-1, attention_mask.size(-1)) if attention_mask is not None else None
-        flat_labels = labels.view(-1) if labels is not None else None
         outputs = self.roberta(
             flat_input_ids,
             position_ids=flat_position_ids,
@@ -593,26 +671,77 @@ class RobertaForTri(BertPreTrainedModel):
             head_mask=head_mask,
         )
         pooled_output = outputs[1]
-        pooled_output = self.dropout(pooled_output)
-        logits = self.classifier(pooled_output).view(-1)
-        logits = self.sigmoid(logits)
-        reshaped_logits = logits.view(-1, num_choices)
 
-        outputs = (logits,) + outputs[2:]  # add hidden states and attention if they are here
+        flat_input_ids_a = input_ids_a.view(-1, input_ids_a.size(-1))
+        flat_attention_mask_a = attention_mask_a.view(-1, attention_mask_a.size(-1))
+        outputs_a = self.roberta(
+            flat_input_ids_a,
+            attention_mask=flat_attention_mask_a,
+        )
+        pooled_output_a = outputs_a[1]
+        # pooled_output = self.dropout(pooled_output)
+        # pooled_output_cat = torch.cat((pooled_output, pooled_output_a), dim=1)
+        pooled_output_cat = torch.cat((pooled_output, pooled_output_a), dim=1)
 
-        pooled_output_tri = pooled_output.view(batch_size, num_choices, -1)
-        positive_indices = labels > 0.5
-        negtive_indices = labels < 0.5
-        positive_output = pooled_output_tri[positive_indices].view(batch_size, 2, -1)
-        negtive_output = pooled_output_tri[negtive_indices].view(batch_size, num_choices - 2, -1)
-        # tri_loss = self.triplet_loss(positive_output[:, 0, :], positive_output[:, 1, :], negtive_output[:, 0, :])
+        pooled_output_cat = self.dropout(pooled_output_cat)
+        logits = self.classifier(pooled_output_cat)
+        reshaped_logits = logits.view(batch_size, num_choices, -1)
 
+        outputs = (reshaped_logits,) + outputs[2:]  # add hidden states and attention if they are here
 
         if labels is not None:
-            loss_fct = BCELoss()
-            loss = loss_fct(logits, flat_labels.float())
+            flat_labels = labels.view(-1)
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(logits, flat_labels)
             # loss = loss + tri_loss
-            outputs = (loss,) + outputs
+
+            pooled_output_tri = pooled_output.view(batch_size, num_choices, -1)
+            positive_indices = labels > 0.5
+            negtive_indices = labels < 0.5
+            positive_output = pooled_output_tri[positive_indices].view(batch_size, -1, pooled_output.size(-1))
+            negtive_output = pooled_output_tri[negtive_indices].view(batch_size, -1, pooled_output.size(-1))
+            positive_num = positive_output.size(1)
+
+            pooled_output_a_tri = pooled_output_a.view(batch_size, num_choices, -1)
+            positive_output_a = pooled_output_a_tri[positive_indices].view(batch_size, -1, pooled_output_a.size(-1))
+
+            assert positive_num == 2
+            for positive_index in range(positive_num):
+                negtive_num = negtive_output.size(1)
+                for negtive_index in range(negtive_num):
+                    negtive_indice = torch.tensor([negtive_index], device=device, dtype=torch.long, requires_grad=False)
+
+                    negtive_embs = torch.index_select(negtive_output, 1,  negtive_indice)
+
+                    tri_loss = self.triplet_loss(positive_output_a[:, positive_index, :], positive_output[:, positive_index, :], negtive_embs[:, 0, :])
+                    loss += self.tri_rate * tri_loss
+
+            # negtive_num = negtive_output.size(1)
+            # for negtive_index in range(negtive_num):
+            #     #
+            #     # negtive_indice = torch.tensor([random.choice(list(range(negtive_num)))],
+            #     #                           device=device, dtype=torch.long, requires_grad=False)
+            #     negtive_indice = torch.tensor([negtive_index], device=device, dtype=torch.long, requires_grad=False)
+            #     negtive_embs = torch.index_select(negtive_output, 1,  negtive_indice)
+            #
+            #     tri_loss = self.triplet_loss(positive_output[:, 0, :], positive_output[:, 1, :],
+            #                              negtive_embs[:, 0, :])
+            #     loss += self.tri_rate * tri_loss
+            #
+            # positive_logits = reshaped_logits[positive_indices].view(batch_size, -1, reshaped_logits.size(-1))
+            # negtive_logits = reshaped_logits[negtive_indices].view(batch_size, -1, reshaped_logits.size(-1))
+            # positive_logits_prob = positive_logits[:, :, 1]
+            # negtive_logits_prob = negtive_logits[:, :, 1]
+            # for positive_index in range(positive_num):
+            #     positive_random_indice = torch.tensor([random.choice(list(range(positive_num)))],
+            #                               device=device, dtype=torch.long, requires_grad=False)
+            #     negtive_random_indice = torch.tensor([random.choice(list(range(negtive_num)))],
+            #                               device=device, dtype=torch.long, requires_grad=False)
+            #     positive_prob = torch.index_select(positive_logits_prob, 1, positive_random_indice)
+            #     negtive_prob = torch.index_select(negtive_logits_prob, 1, negtive_random_indice)
+            #     prob_labels = torch.tensor([])
+
+            outputs = (loss, tri_loss) + outputs
 
         return outputs  # (loss), reshaped_logits, (hidden_states), (attentions)
 
@@ -925,7 +1054,7 @@ class RobertaForQuestionAnsweringHotpot(BertPreTrainedModel):
                 type_loss = loss_fct(type_logits, type_labels)
                 if str(type_loss.item()) == 'nan':
                     print('sentence loss error!')
-                total_loss += 10 * type_loss
+                total_loss += type_loss
             if sentence_labels is not None:
                 loss_cnt += 1
                 loss_fct = CrossEntropyLoss()
@@ -942,7 +1071,7 @@ class RobertaForQuestionAnsweringHotpot(BertPreTrainedModel):
                 # print('yes_no_label item:{}'.format(yes_no_loss.item()))
                 if str(yes_no_loss.item()) == 'nan':
                     print('yes no loss error!')
-                total_loss += 10 * yes_no_loss
+                total_loss += yes_no_loss
             total_loss = total_loss
             outputs = (total_loss, type_loss, sentence_loss, yes_no_loss) + outputs + (sentence_logits_tensor_masked_reshaped, type_logits,)
 

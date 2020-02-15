@@ -172,21 +172,33 @@ def glue_convert_examples_to_features(
 
             inputs = tokenizer.encode_plus(example.text_a, example.text_b, add_special_tokens=True, max_length=max_length, )
             input_ids, token_type_ids = inputs["input_ids"], inputs["token_type_ids"]
-
+            max_length_a = 64
+            inputs_a = tokenizer.encode_plus(example.text_a, add_special_tokens=True, max_length=max_length_a)
+            input_ids_a, token_type_ids_a = inputs_a['input_ids'], inputs_a['token_type_ids']
+            attention_mask_a = [1 if mask_padding_with_zero else 0] * len(input_ids_a)
             # The mask has 1 for real tokens and 0 for padding tokens. Only real
             # tokens are attended to.
             attention_mask = [1 if mask_padding_with_zero else 0] * len(input_ids)
 
             # Zero-pad up to the sequence length.
             padding_length = max_length - len(input_ids)
+            padding_length_a = max_length_a - len(input_ids_a)
             if pad_on_left:
                 input_ids = ([pad_token] * padding_length) + input_ids
                 attention_mask = ([0 if mask_padding_with_zero else 1] * padding_length) + attention_mask
                 token_type_ids = ([pad_token_segment_id] * padding_length) + token_type_ids
+
+                input_ids_a = ([pad_token] * padding_length_a) + input_ids_a
+                attention_mask_a = ([0 if mask_padding_with_zero else 1] * padding_length_a) + attention_mask_a
+                token_type_ids_a = ([pad_token_segment_id] * padding_length_a) + token_type_ids_a
             else:
                 input_ids = input_ids + ([pad_token] * padding_length)
                 attention_mask = attention_mask + ([0 if mask_padding_with_zero else 1] * padding_length)
                 token_type_ids = token_type_ids + ([pad_token_segment_id] * padding_length)
+
+                input_ids_a = input_ids_a + ([pad_token] * padding_length_a)
+                attention_mask_a = attention_mask_a + ([0 if mask_padding_with_zero else 1] * padding_length_a)
+                token_type_ids_a = token_type_ids_a + ([pad_token_segment_id] * padding_length_a)
 
             assert len(input_ids) == max_length, "Error with input length {} vs {}".format(len(input_ids), max_length)
             assert len(attention_mask) == max_length, "Error with input length {} vs {}".format(
@@ -194,6 +206,14 @@ def glue_convert_examples_to_features(
             )
             assert len(token_type_ids) == max_length, "Error with input length {} vs {}".format(
                 len(token_type_ids), max_length
+            )
+
+            assert len(input_ids_a) == max_length_a, "Error with input length {} vs {}".format(len(input_ids_a), max_length_a)
+            assert len(attention_mask_a) == max_length_a, "Error with input length {} vs {}".format(
+                len(attention_mask_a), max_length_a
+            )
+            assert len(token_type_ids_a) == max_length_a, "Error with input length {} vs {}".format(
+                len(token_type_ids_a), max_length_a
             )
 
             if output_mode == "classification":
@@ -212,7 +232,8 @@ def glue_convert_examples_to_features(
                 logger.info("label: %s (id = %d)" % (example.label, label))
 
             features.append(InputFeatures(
-                input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, label=label))
+                input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids, label=label,
+            input_ids_a=input_ids_a, attention_mask_a=attention_mask_a, token_type_ids_a=token_type_ids_a,))
 
 
     if is_tf_available() and is_tf_dataset:
@@ -639,6 +660,51 @@ class HotpotProcessor(DataProcessor):
             #     break
         return examples
 
+class HotpotSFProcessor(HotpotProcessor):
+    """Processor for the WNLI data set (GLUE version)."""
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_json_line(os.path.join(data_dir, "train.json.para.sf")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_json_line(os.path.join(data_dir, "dev.json.para.sf")), "dev")
+
+    def get_labels(self):
+        """See base class."""
+        return ["0", "1"]
+
+class HotpotYesNoProcessor(HotpotProcessor):
+    """Processor for the WNLI data set (GLUE version)."""
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_json_line(os.path.join(data_dir, "train.json.para.yes_no")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_json_line(os.path.join(data_dir, "dev.json.para.yes_no")), "dev")
+
+    def get_labels(self):
+        """See base class."""
+        return ["0", "1", "2"]
+class Hotpot2ndNoProcessor(HotpotProcessor):
+    """Processor for the WNLI data set (GLUE version)."""
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_json_line(os.path.join(data_dir, "train.json.para.2nd")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(self._read_json_line(os.path.join(data_dir, "dev.json.para.2nd")), "dev")
+
+    def get_labels(self):
+        """See base class."""
+        return ["0", "1"]
+
+
 glue_tasks_num_labels = {
     "cola": 2,
     "mnli": 3,
@@ -650,6 +716,9 @@ glue_tasks_num_labels = {
     "rte": 2,
     "wnli": 2,
     "hotpot": 2,
+    "hotpot_sf": 2,
+    "hotpot_yes_no": 3,
+    "hotpot_2nd": 2,
 }
 
 glue_processors = {
@@ -664,6 +733,9 @@ glue_processors = {
     "rte": RteProcessor,
     "wnli": WnliProcessor,
     "hotpot": HotpotProcessor,
+    "hotpot_sf": HotpotSFProcessor,
+    "hotpot_yes_no": HotpotYesNoProcessor,
+    "hotpot_2nd": Hotpot2ndNoProcessor,
 }
 
 glue_output_modes = {
@@ -678,4 +750,7 @@ glue_output_modes = {
     "rte": "classification",
     "wnli": "classification",
     "hotpot": "classification",
+    "hotpot_sf": "classification",
+    "hotpot_yes_no": "classification",
+    "hotpot_2nd": "classification",
 }
