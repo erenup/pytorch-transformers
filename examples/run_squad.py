@@ -237,20 +237,23 @@ def train(args, train_dataset, model, tokenizer):
             outputs = model(**inputs)
             # model outputs are always tuple in transformers (see doc)
             loss = outputs[0]
-            type_loss = outputs[1]
-            sent_loss = outputs[2]
-            yes_no_loss = outputs[3]
+            if args.model_type == 'hotpot_roberta':
+                type_loss = outputs[1]
+                sent_loss = outputs[2]
+                yes_no_loss = outputs[3]
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel (not distributed) training
-                type_loss = type_loss.mean()
-                sent_loss = sent_loss.mean()
-                yes_no_loss = yes_no_loss.mean()
+                if args.model_type == 'hotpot_roberta':
+                    type_loss = type_loss.mean()
+                    sent_loss = sent_loss.mean()
+                    yes_no_loss = yes_no_loss.mean()
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
-                type_loss = type_loss / args.gradient_accumulation_steps
-                sent_loss = sent_loss / args.gradient_accumulation_steps
-                yes_no_loss = yes_no_loss / args.gradient_accumulation_steps
+                if args.model_type == 'hotpot_roberta':
+                    type_loss = type_loss / args.gradient_accumulation_steps
+                    sent_loss = sent_loss / args.gradient_accumulation_steps
+                    yes_no_loss = yes_no_loss / args.gradient_accumulation_steps
 
             if args.fp16:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -259,9 +262,10 @@ def train(args, train_dataset, model, tokenizer):
                 loss.backward()
 
             tr_loss += loss.item()
-            tr_type_loss += type_loss.item()
-            tr_sent_loss += sent_loss.item()
-            tr_yes_no_loss += yes_no_loss.item()
+            if args.model_type == 'hotpot_roberta':
+                tr_type_loss += type_loss.item()
+                tr_sent_loss += sent_loss.item()
+                tr_yes_no_loss += yes_no_loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
                     torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
@@ -283,22 +287,24 @@ def train(args, train_dataset, model, tokenizer):
                     tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
                     tb_writer.add_scalar("total_loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
                     logging.info("average total loss: {}, global step: {}".format((tr_loss - logging_loss) / args.logging_steps, global_step))
-                    tb_writer.add_scalar("type_loss", (tr_type_loss - logging_type_loss) / args.logging_steps, global_step)
-                    logging.info(
-                        "average type loss: {}, global step: {}".format((tr_type_loss - logging_type_loss) / args.logging_steps,
-                                                                   global_step))
-                    tb_writer.add_scalar("sent_loss", (tr_sent_loss - logging_sent_loss) / args.logging_steps, global_step)
-                    logging.info(
-                        "average sent loss: {}, global step: {}".format((tr_sent_loss - logging_sent_loss) / args.logging_steps,
-                                                                   global_step))
-                    tb_writer.add_scalar("yes_no_loss", (tr_yes_no_loss - logging_yes_no_loss) / args.logging_steps, global_step)
-                    logging.info(
-                        "yes no sent loss: {}, global step: {}".format((tr_yes_no_loss - logging_yes_no_loss) / args.logging_steps,
-                                                                   global_step))
                     logging_loss = tr_loss
-                    logging_type_loss = tr_type_loss
-                    logging_sent_loss = tr_sent_loss
-                    logging_yes_no_loss = tr_yes_no_loss
+                    if args.model_type == 'hotpot_roberta':
+                        tb_writer.add_scalar("type_loss", (tr_type_loss - logging_type_loss) / args.logging_steps, global_step)
+                        logging.info(
+                            "average type loss: {}, global step: {}".format((tr_type_loss - logging_type_loss) / args.logging_steps,
+                                                                       global_step))
+                        tb_writer.add_scalar("sent_loss", (tr_sent_loss - logging_sent_loss) / args.logging_steps, global_step)
+                        logging.info(
+                            "average sent loss: {}, global step: {}".format((tr_sent_loss - logging_sent_loss) / args.logging_steps,
+                                                                       global_step))
+                        tb_writer.add_scalar("yes_no_loss", (tr_yes_no_loss - logging_yes_no_loss) / args.logging_steps, global_step)
+                        logging.info(
+                            "yes no sent loss: {}, global step: {}".format((tr_yes_no_loss - logging_yes_no_loss) / args.logging_steps,
+                                                                       global_step))
+
+                        logging_type_loss = tr_type_loss
+                        logging_sent_loss = tr_sent_loss
+                        logging_yes_no_loss = tr_yes_no_loss
 
                 # Save model checkpoint
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:

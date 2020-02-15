@@ -73,6 +73,11 @@ def select_field(features, field):
 def simple_accuracy(preds, labels):
     return (preds == labels).mean()
 
+def recall_prec_f1(preds, labels):
+    from sklearn.metrics import precision_recall_fscore_support
+    precision, recall, f1, true_num = precision_recall_fscore_support(y_true=labels, y_pred=preds)
+    return {'precision': precision, 'recall': recall, 'f1': f1, 'true_num': true_num}
+
 
 def set_seed(args):
     random.seed(args.seed)
@@ -143,7 +148,7 @@ def train(args, train_dataset, model, tokenizer):
 
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
-    best_dev_acc = 0.0
+    tr_tri_loss, logging_tri_loss = 0.0, 0.0
     best_steps = 0
     model.zero_grad()
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
@@ -161,13 +166,27 @@ def train(args, train_dataset, model, tokenizer):
                 else None,  # XLM don't use segment_ids
                 "labels": batch[3],
             }
+            if args.model_type == 'roberta-tri':
+                inputs.update({
+                "input_ids_a": batch[4],
+                "attention_mask_a": batch[5],
+                "token_type_ids_a": batch[6]
+                if args.model_type in ["bert", "xlnet"]
+                else None,  # XLM don't use segment_ids
+                })
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
+            if args.model_type == 'roberta-tri':
+                tri_loss = outputs[1]
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
+                if args.model_type == 'roberta-tri':
+                    tri_loss = tri_loss.mean()
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
+                if args.model_type == 'roberta-tri':
+                    tri_loss = tri_loss / args.gradient_accumulation_steps
 
             if args.fp16:
                 with amp.scale_loss(loss, optimizer) as scaled_loss:
@@ -178,6 +197,8 @@ def train(args, train_dataset, model, tokenizer):
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
             tr_loss += loss.item()
+            if args.model_type == 'roberta-tri':
+                tr_tri_loss += tri_loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
 
                 optimizer.step()
@@ -191,21 +212,9 @@ def train(args, train_dataset, model, tokenizer):
                         args.local_rank == -1 and args.evaluate_during_training
                     ):  # Only evaluate when single GPU otherwise metrics may not average well
                         results = evaluate(args, model, tokenizer)
+                        print(results)
                         for key, value in results.items():
                             tb_writer.add_scalar("eval_{}".format(key), value, global_step)
-                        if results["eval_acc"] > best_dev_acc:
-                            best_dev_acc = results["eval_acc"]
-                            best_steps = global_step
-                            if args.do_test:
-                                results_test = evaluate(args, model, tokenizer, test=True)
-                                for key, value in results_test.items():
-                                    tb_writer.add_scalar("test_{}".format(key), value, global_step)
-                                logger.info(
-                                    "test acc: %s, loss: %s, global steps: %s",
-                                    str(results_test["eval_acc"]),
-                                    str(results_test["eval_loss"]),
-                                    str(global_step),
-                                )
                     tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
                     tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
                     logger.info(
@@ -213,7 +222,13 @@ def train(args, train_dataset, model, tokenizer):
                         str((tr_loss - logging_loss) / args.logging_steps),
                         str(global_step),
                     )
+                    logger.info(
+                        "Average tri loss: %s at global step: %s",
+                        str((tr_tri_loss - logging_tri_loss) / args.logging_steps),
+                        str(global_step),
+                    )
                     logging_loss = tr_loss
+                    logging_tri_loss = tr_tri_loss
 
                 if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
                     # Save model checkpoint
@@ -266,7 +281,6 @@ def evaluate(args, model, tokenizer, prefix="", test=False):
         logger.info("***** Running evaluation {} *****".format(prefix))
         logger.info("  Num examples = %d", len(eval_dataset))
         logger.info("  Batch size = %d", args.eval_batch_size)
-        eval_loss = 0.0
         nb_eval_steps = 0
         preds = None
         out_label_ids = None
@@ -281,36 +295,48 @@ def evaluate(args, model, tokenizer, prefix="", test=False):
                     "token_type_ids": batch[2]
                     if args.model_type in ["bert", "xlnet"]
                     else None,  # XLM don't use segment_ids
-                    "labels": batch[3],
+                    # "labels": batch[3],
                 }
+                if args.model_type == 'roberta-tri':
+                    inputs.update({
+                    "input_ids_a": batch[4],
+                    "attention_mask_a": batch[5],
+                    "token_type_ids_a": batch[6]
+                    if args.model_type in ["bert", "xlnet"]
+                    else None,  # XLM don't use segment_ids
+                    })
+                labels = batch[3]
                 outputs = model(**inputs)
-                tmp_eval_loss, logits = outputs[:2]
+                logits = outputs[0]
 
-                eval_loss += tmp_eval_loss.mean().item()
             nb_eval_steps += 1
             if preds is None:
                 preds = logits.detach().cpu().numpy()
-                if inputs["labels"].size(-1) > 1:
-                    out_label_ids = inputs["labels"].view(-1).detach().cpu().numpy()
+                if labels.size(-1) > 1:
+                    out_label_ids = labels.detach().cpu().numpy()
                     tri = True
                 else:
-                    out_label_ids = inputs["labels"].detach().cpu().numpy()
+                    out_label_ids = labels.detach().cpu().numpy()
             else:
                 preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-                if inputs["labels"].size(-1) > 1:
-                    out_label_ids = np.append(out_label_ids, inputs["labels"].view(-1).detach().cpu().numpy(), axis=0)
+                if labels.size(-1) > 1:
+                    out_label_ids = np.append(out_label_ids, labels.detach().cpu().numpy(), axis=0)
                     tri = True
                 else:
-                    out_label_ids = np.append(out_label_ids, inputs["labels"].detach().cpu().numpy(), axis=0)
+                    out_label_ids = np.append(out_label_ids, labels.detach().cpu().numpy(), axis=0)
 
-        eval_loss = eval_loss / nb_eval_steps
         if not tri:
             preds = np.argmax(preds, axis=1)
         else:
-            preds[preds > 0.5] = 1.0
-            preds[preds <= 0.5] = 0.0
-        acc = simple_accuracy(preds, out_label_ids)
-        result = {"eval_acc": acc, "eval_loss": eval_loss}
+            preds = np.argmax(preds, axis=2)
+        if not tri:
+            acc = simple_accuracy(preds, out_label_ids)
+            result = {'acc': acc}
+        else:
+            preds_flat = preds.reshape(-1)
+            labels_flat = out_label_ids.reshape(-1)
+            result = recall_prec_f1(preds_flat, labels_flat)
+
         results.update(result)
 
         output_eval_file = os.path.join(eval_output_dir, "is_test_" + str(test).lower() + "_eval_results.txt")
@@ -389,9 +415,13 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False, test=False):
     all_input_ids = torch.tensor(select_field(features, "input_ids"), dtype=torch.long)
     all_input_mask = torch.tensor(select_field(features, "input_mask"), dtype=torch.long)
     all_segment_ids = torch.tensor(select_field(features, "segment_ids"), dtype=torch.long)
+
+    all_input_ids_a = torch.tensor(select_field(features, "input_ids_a"), dtype=torch.long)
+    all_input_mask_a = torch.tensor(select_field(features, "input_mask_a"), dtype=torch.long)
+    all_segment_ids_a = torch.tensor(select_field(features, "segment_ids_a"), dtype=torch.long)
     all_label_ids = torch.tensor([f.label for f in features], dtype=torch.long)
 
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_input_ids_a, all_input_mask_a, all_segment_ids_a,)
     return dataset
 
 
@@ -524,6 +554,7 @@ def main():
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
+    parser.add_argument('--tri_rate', default=0.0, type=float, help='rate for tri loss')
     args = parser.parse_args()
 
     if (
@@ -596,6 +627,8 @@ def main():
         finetuning_task=args.task_name,
         cache_dir=args.cache_dir if args.cache_dir else None,
     )
+    if args.model_type == 'roberta-tri':
+        setattr(config, "tri_rate", args.tri_rate)
     tokenizer = tokenizer_class.from_pretrained(
         args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
         do_lower_case=args.do_lower_case,

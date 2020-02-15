@@ -26,7 +26,7 @@ from typing import List
 import tqdm
 
 from transformers import PreTrainedTokenizer
-
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,9 @@ class InputFeatures(object):
     def __init__(self, example_id, choices_features, label):
         self.example_id = example_id
         self.choices_features = [
-            {"input_ids": input_ids, "input_mask": input_mask, "segment_ids": segment_ids}
-            for input_ids, input_mask, segment_ids in choices_features
+            {"input_ids": input_ids, "input_mask": input_mask, "segment_ids": segment_ids,
+             "input_ids_a": input_ids_a, "input_mask_a": input_mask_a, "segment_ids_a": segment_ids_a}
+            for input_ids, input_mask, segment_ids, input_ids_a, input_mask_a, segment_ids_a in choices_features
         ]
         self.label = label
 
@@ -235,18 +236,24 @@ class HotpotProcessor(DataProcessor):
     def _create_examples(self, lines, type: str):
         """Creates examples for the training and dev sets."""
         examples = []
-        for line in tqdm.tqdm(lines, total=len(lines), desc='convert input examples'):
+        for line in tqdm.tqdm(lines[:], total=len(lines), desc='convert input examples'):
             question = line['question']
             paras = line['paras']
             labels = line['labels']
+            paras_new = []
+            labels_new = []
+            random_indices = random.sample(list(range(len(paras))), len(paras))
+            for indice in random_indices:
+                paras_new.append(paras[indice])
+                labels_new.append(labels[indice])
             _id = line['_id']
             examples.append(
                     InputExample(
                         example_id=_id,
                         question = question,
-                        contexts=paras,
-                        endings=['' for _ in paras],
-                        label=labels,
+                        contexts=paras_new,
+                        endings=['' for _ in paras_new],
+                        label=labels_new,
                     )
             )
 
@@ -381,6 +388,10 @@ def convert_examples_to_features(
                 )
 
             input_ids, token_type_ids = inputs["input_ids"], inputs["token_type_ids"]
+            max_length_a = 64
+            inputs_a = tokenizer.encode_plus(text_a, add_special_tokens=True, max_length=max_length_a,)
+            input_ids_a, token_type_ids_a = inputs_a["input_ids"], inputs_a["token_type_ids"]
+            attention_mask_a = [1 if mask_padding_with_zero else 0] * len(input_ids_a)
 
             # The mask has 1 for real tokens and 0 for padding tokens. Only real
             # tokens are attended to.
@@ -388,26 +399,39 @@ def convert_examples_to_features(
 
             # Zero-pad up to the sequence length.
             padding_length = max_length - len(input_ids)
+            padding_length_a = max_length_a - len(input_ids_a)
             if pad_on_left:
                 input_ids = ([pad_token] * padding_length) + input_ids
                 attention_mask = ([0 if mask_padding_with_zero else 1] * padding_length) + attention_mask
                 token_type_ids = ([pad_token_segment_id] * padding_length) + token_type_ids
+
+                input_ids_a = ([pad_token] * padding_length_a) + input_ids_a
+                attention_mask_a = ([0 if mask_padding_with_zero else 1] * padding_length_a) + attention_mask_a
+                token_type_ids_a = ([pad_token_segment_id] * padding_length_a) + token_type_ids_a
             else:
                 input_ids = input_ids + ([pad_token] * padding_length)
                 attention_mask = attention_mask + ([0 if mask_padding_with_zero else 1] * padding_length)
                 token_type_ids = token_type_ids + ([pad_token_segment_id] * padding_length)
 
+                input_ids_a = input_ids_a + ([pad_token] * padding_length_a)
+                attention_mask_a = attention_mask_a + ([0 if mask_padding_with_zero else 1] * padding_length_a)
+                token_type_ids_a = token_type_ids_a + ([pad_token_segment_id] * padding_length_a)
+
             assert len(input_ids) == max_length
             assert len(attention_mask) == max_length
             assert len(token_type_ids) == max_length
-            choices_features.append((input_ids, attention_mask, token_type_ids))
+
+            assert len(input_ids_a) == max_length_a
+            assert len(attention_mask_a) == max_length_a
+            assert len(token_type_ids_a) == max_length_a
+            choices_features.append((input_ids, attention_mask, token_type_ids, input_ids_a, attention_mask_a, token_type_ids_a))
 
         label = label_map[example.label] if type(example.label) != list else [label_map[x] for x in example.label]
 
         if ex_index < 2:
             logger.info("*** Example ***")
             logger.info("race_id: {}".format(example.example_id))
-            for choice_idx, (input_ids, attention_mask, token_type_ids) in enumerate(choices_features):
+            for choice_idx, (input_ids, attention_mask, token_type_ids, input_ids_a, attention_mask_a, token_type_ids_a) in enumerate(choices_features):
                 logger.info("choice: {}".format(choice_idx))
                 logger.info("input_ids: {}".format(" ".join(map(str, input_ids))))
                 logger.info("attention_mask: {}".format(" ".join(map(str, attention_mask))))
