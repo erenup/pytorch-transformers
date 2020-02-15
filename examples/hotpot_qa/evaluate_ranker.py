@@ -261,6 +261,8 @@ if __name__ == '__main__':
     examples = combine_examples_results(eval_examples, eval_results)
     examples_dict = examples2dict(examples)
     hotpot_examples_with_scores = combine_examples_with_scores(hotpot_examples, examples_dict)
+    output_file = args.eval_file + ".ranked"
+    write_json(hotpot_examples_with_scores, output_file,data_format='hotpot ranked')
     hotpot_dict = {example['_id']: example for example in hotpot_examples}
     retrieved_hotpot = examples2hotpot(examples_dict)
     retrieved_hotpot_dict = {example['_id']: example for example in retrieved_hotpot}
@@ -271,9 +273,6 @@ if __name__ == '__main__':
         hotpot_dict[_id]['scored_retrieved'] = retrieved['scored_retrieved']
 
     squad_data = convert_topn2squad(hotpot_dict, top_n=args.top_n)
-
-    output_file = args.eval_file + ".ranked"
-    write_json(hotpot_examples_with_scores, output_file,data_format='hotpot ranked')
     # squad_file = args.eval_file + ".squad.top_{}".format(args.top_n)
     # write_json(squad_data, squad_file)
 
