@@ -22,7 +22,7 @@ def convert_hardem2para(hard_em_list):
             if answer:
                 label = '1'
             context = " ".join(context)
-            para_examples.append({'id': _id + "_" + str(index), 'squad_id': _id, 'question': question, 'document': context,
+            para_examples.append({'id': str(_id) + "_" + str(index), 'squad_id': _id, 'question': question, 'document': context,
                                 'squad_answers': final_answers_squad, 'label': label, 'squad_context': ''})
             if label == '1':
                 positive += 1
@@ -44,13 +44,13 @@ if __name__ == "__main__":
     dev_para_examples = convert_hardem2para(dev_data)
     write_line_json(dev_para_examples, output_dev_file)
 
-    # train_files = glob.glob('{}/{}-train*.json'.format(args.hardem_dir, args.hardem_task))
-    # train_data = []
-    # for train_file in train_files:
-    #     train_data.extend(read_line_json(train_file))
-    # output_train_file = os.path.join(args.hardem_dir, 'train.json.para')
-    # train_para_example = convert_hardem2para(train_data)
-    # write_line_json(train_para_example, output_train_file)
+    train_files = glob.glob('{}/{}-train*.json'.format(args.hardem_dir, args.hardem_task))
+    train_data = []
+    for train_file in train_files:
+        train_data.extend(read_line_json(train_file))
+    output_train_file = os.path.join(args.hardem_dir, 'train.json.para')
+    train_para_example = convert_hardem2para(train_data)
+    write_line_json(train_para_example, output_train_file)
 
 
 
