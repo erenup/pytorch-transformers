@@ -16,6 +16,7 @@ def convert_hardem2para(hard_em_list):
         final_answers = example['final_answers']
         question = example['question']
         final_answers_squad = [{"text": answer, "answer_start": -1} for answer in final_answers]
+        total = len(contexts)
         for index, ac in enumerate(zip(answers, contexts)):
             answer, context = ac
             label = '0'
@@ -23,7 +24,7 @@ def convert_hardem2para(hard_em_list):
                 label = '1'
             context = " ".join(context)
             para_examples.append({'id': str(_id) + "_" + str(index), 'squad_id': _id, 'question': question, 'document': context,
-                                'squad_answers': final_answers_squad, 'label': label, 'squad_context': ''})
+                                'squad_answers': final_answers_squad, 'label': label, 'squad_context': '', 'tfidf_score': total - index})
             if label == '1':
                 positive += 1
             else:
