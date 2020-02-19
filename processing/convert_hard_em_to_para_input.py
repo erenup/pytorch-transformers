@@ -53,5 +53,11 @@ if __name__ == "__main__":
     train_para_example = convert_hardem2para(train_data)
     write_line_json(train_para_example, output_train_file)
 
+    test_file = os.path.join(args.hardem_dir, args.hardem_task + '-test.json')
+    test_data = read_line_json(test_file)
+    output_test_file = os.path.join(args.hardem_dir, 'test.json.para')
+    test_para_examples = convert_hardem2para(test_data)
+    write_line_json(test_para_examples, output_test_file)
+
 
 
