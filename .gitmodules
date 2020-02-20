@@ -1,3 +1,6 @@
 [submodule "transformers"]
 	path = transformers
 	url = https://github.com/huggingface/transformers.git
+[submodule "nlp-architect"]
+	path = nlp-architect
+	url = https://github.com/NervanaSystems/nlp-architect.git
