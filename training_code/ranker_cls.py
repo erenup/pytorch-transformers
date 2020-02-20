@@ -62,6 +62,8 @@ from data_cls import hotpot_compute_metrics as compute_metrics
 from transformers import glue_convert_examples_to_features as convert_examples_to_features
 from data_cls import hotpot_output_modes as output_modes
 from data_cls import hotpot_processors as processors
+from data_cls import dcbert_convert_examples_to_features
+from dc_bert import DCBERT
 
 
 try:
@@ -90,6 +92,7 @@ ALL_MODELS = sum(
 )
 
 MODEL_CLASSES = {
+    "dc-bert": (BertConfig, DCBERT, BertTokenizer),
     "bert": (BertConfig, BertForSequenceClassification, BertTokenizer),
     "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
     "xlm": (XLMConfig, XLMForSequenceClassification, XLMTokenizer),
@@ -213,8 +216,18 @@ def train(args, train_dataset, model, tokenizer):
             inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
             if args.model_type != "distilbert":
                 inputs["token_type_ids"] = (
-                    batch[2] if args.model_type in ["bert", "xlnet", "albert"] else None
+                    batch[2] if args.model_type in ["bert", "xlnet", "albert", "dc-bert"] else None
                 )  # XLM, DistilBERT, RoBERTa, and XLM-RoBERTa don't use segment_ids
+            if args.model_type == 'dc-bert':
+                inputs.update({
+                    "input_ids_a": batch[4],
+                    "attention_mask_a": batch[6],
+                    "token_type_ids_a": batch[5],
+                    "input_ids_b": batch[7],
+                    "attention_mask_b": batch[8],
+                    "token_type_ids_b": batch[9],
+
+                })
             outputs = model(**inputs)
             loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
@@ -330,8 +343,18 @@ def evaluate(args, model, tokenizer, prefix=""):
                 inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
                 if args.model_type != "distilbert":
                     inputs["token_type_ids"] = (
-                        batch[2] if args.model_type in ["bert", "xlnet", "albert"] else None
+                        batch[2] if args.model_type in ["bert", "xlnet", "albert", "dc-bert"] else None
                     )  # XLM, DistilBERT, RoBERTa, and XLM-RoBERTa don't use segment_ids
+                if args.model_type == 'dc-bert':
+                    inputs.update({
+                        "input_ids_a": batch[4],
+                        "attention_mask_a": batch[6],
+                        "token_type_ids_a": batch[5],
+                        "input_ids_b": batch[7],
+                        "attention_mask_b": batch[8],
+                        "token_type_ids_b": batch[9],
+
+                    })
                 outputs = model(**inputs)
                 tmp_eval_loss, logits = outputs[:2]
 
@@ -396,16 +419,28 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         examples = (
             processor.get_dev_examples(args.data_dir) if evaluate else processor.get_train_examples(args.data_dir)
         )
-        features = convert_examples_to_features(
-            examples,
-            tokenizer,
-            label_list=label_list,
-            max_length=args.max_seq_length,
-            output_mode=output_mode,
-            pad_on_left=bool(args.model_type in ["xlnet"]),  # pad on the left for xlnet
-            pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
-            pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
-        )
+        if args.model_type == "dc-bert":
+            features = dcbert_convert_examples_to_features(
+                examples,
+                tokenizer,
+                label_list=label_list,
+                max_length=args.max_seq_length,
+                output_mode=output_mode,
+                pad_on_left=bool(args.model_type in ["xlnet"]),  # pad on the left for xlnet
+                pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+                pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
+            )
+        else:
+            features = convert_examples_to_features(
+                examples,
+                tokenizer,
+                label_list=label_list,
+                max_length=args.max_seq_length,
+                output_mode=output_mode,
+                pad_on_left=bool(args.model_type in ["xlnet"]),  # pad on the left for xlnet
+                pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
+                pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
+            )
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
             torch.save(features, cached_features_file)
@@ -421,8 +456,18 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         all_labels = torch.tensor([f.label for f in features], dtype=torch.long)
     elif output_mode == "regression":
         all_labels = torch.tensor([f.label for f in features], dtype=torch.float)
-
-    dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels)
+    if args.model_type == 'dc-bert':
+        all_input_ids_a = torch.tensor([f.input_ids_a for f in features], dtype=torch.long)
+        all_attention_mask_a = torch.tensor([f.attention_mask_a for f in features], dtype=torch.long)
+        all_token_type_ids_a = torch.tensor([f.token_type_ids_a for f in features], dtype=torch.long)
+        all_input_ids_b = torch.tensor([f.input_ids_b for f in features], dtype=torch.long)
+        all_attention_mask_b = torch.tensor([f.attention_mask_b for f in features], dtype=torch.long)
+        all_token_type_ids_b = torch.tensor([f.token_type_ids_b for f in features], dtype=torch.long)
+        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels,
+                                all_input_ids_a, all_attention_mask_a, all_token_type_ids_a,
+                                all_input_ids_b, all_attention_mask_b, all_token_type_ids_b)
+    else:
+        dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels)
     return dataset
 
 
@@ -556,6 +601,7 @@ def main():
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
+    parser.add_argument("--nsp", default=1.0, type=float, help='negative sampling probability')
     args = parser.parse_args()
 
     if (
