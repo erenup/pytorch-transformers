@@ -70,6 +70,102 @@ class DCInputFeatures(object):
         """Serializes this instance to a JSON string."""
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
+def dcbert_convert_examples_to_feature(example,
+    tokenizer=None,
+    max_length=512,
+    task=None,
+    label_list=None,
+    output_mode=None,
+    pad_on_left=False,
+    pad_token=0,
+    pad_token_segment_id=0,
+    mask_padding_with_zero=True,
+    max_length_a=64,
+    max_length_b=200,
+):
+    label_map = {label: i for i, label in enumerate(label_list)}
+    inputs = tokenizer.encode_plus(example.text_a, example.text_b, add_special_tokens=True, max_length=max_length, )
+    input_ids, token_type_ids = inputs["input_ids"], inputs["token_type_ids"]
+
+    inputs_a = tokenizer.encode_plus(example.text_a, max_length=max_length_a, )
+    input_ids_a, token_type_ids_a = inputs_a["input_ids"], inputs_a["token_type_ids"]
+
+    inputs_b = tokenizer.encode_plus(example.text_b, max_length=max_length_b, )
+    input_ids_b, token_type_ids_b = inputs_b["input_ids"], inputs_b["token_type_ids"]
+
+    # The mask has 1 for real tokens and 0 for padding tokens. Only real
+    # tokens are attended to.
+    attention_mask = [1 if mask_padding_with_zero else 0] * len(input_ids)
+    attention_mask_a = [1 if mask_padding_with_zero else 0] * len(input_ids_a)
+    attention_mask_b = [1 if mask_padding_with_zero else 0] * len(input_ids_b)
+
+    # Zero-pad up to the sequence length.
+    padding_length = max_length - len(input_ids)
+    padding_length_a = max_length_a - len(input_ids_a)
+    padding_length_b = max_length_b - len(input_ids_b)
+    if pad_on_left:
+        input_ids = ([pad_token] * padding_length) + input_ids
+        attention_mask = ([0 if mask_padding_with_zero else 1] * padding_length) + attention_mask
+        token_type_ids = ([pad_token_segment_id] * padding_length) + token_type_ids
+
+        input_ids_a = ([pad_token] * padding_length_a) + input_ids_a
+        attention_mask_a = ([0 if mask_padding_with_zero else 1] * padding_length_a) + attention_mask_a
+        token_type_ids_a = ([pad_token_segment_id] * padding_length_a) + token_type_ids_a
+
+        input_ids_b = ([pad_token] * padding_length_b) + input_ids_b
+        attention_mask_b = ([0 if mask_padding_with_zero else 1] * padding_length_b) + attention_mask_b
+        token_type_ids_b = ([pad_token_segment_id] * padding_length_b) + token_type_ids_b
+    else:
+        input_ids = input_ids + ([pad_token] * padding_length)
+        attention_mask = attention_mask + ([0 if mask_padding_with_zero else 1] * padding_length)
+        token_type_ids = token_type_ids + ([pad_token_segment_id] * padding_length)
+
+        input_ids_a = input_ids_a + ([pad_token] * padding_length_a)
+        attention_mask_a = attention_mask_a + ([0 if mask_padding_with_zero else 1] * padding_length_a)
+        token_type_ids_a = token_type_ids_a + ([pad_token_segment_id] * padding_length_a)
+
+        input_ids_b = input_ids_b + ([pad_token] * padding_length_b)
+        attention_mask_b = attention_mask_b + ([0 if mask_padding_with_zero else 1] * padding_length_b)
+        token_type_ids_b = token_type_ids_b + ([pad_token_segment_id] * padding_length_b)
+
+    assert len(input_ids) == max_length, "Error with input length {} vs {}".format(len(input_ids), max_length)
+    assert len(attention_mask) == max_length, "Error with input length {} vs {}".format(
+        len(attention_mask), max_length
+    )
+    assert len(token_type_ids) == max_length, "Error with input length {} vs {}".format(
+        len(token_type_ids), max_length
+    )
+
+    assert len(input_ids_a) == max_length_a, "Error with input length {} vs {}".format(len(input_ids_a), max_length_a)
+    assert len(attention_mask_a) == max_length_a, "Error with input length {} vs {}".format(
+        len(attention_mask_a), max_length_a
+    )
+    assert len(token_type_ids_a) == max_length_a, "Error with input length {} vs {}".format(
+        len(token_type_ids_a), max_length_a
+    )
+
+    assert len(input_ids_b) == max_length_b, "Error with input length {} vs {}".format(len(input_ids_b), max_length_b)
+    assert len(attention_mask_b) == max_length_b, "Error with input length {} vs {}".format(
+        len(attention_mask_b), max_length_b
+    )
+    assert len(token_type_ids_b) == max_length_b, "Error with input length {} vs {}".format(
+        len(token_type_ids_b), max_length_b
+    )
+
+    if output_mode == "classification":
+        label = label_map[example.label]
+    elif output_mode == "regression":
+        label = float(example.label)
+    else:
+        raise KeyError(output_mode)
+
+    return DCInputFeatures(
+            input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids,
+            input_ids_a=input_ids_a, attention_mask_a=attention_mask_a, token_type_ids_a=token_type_ids_a,
+            input_ids_b=input_ids_b, attention_mask_b=attention_mask_b, token_type_ids_b=token_type_ids_b, label=label
+        )
+
+
 def dcbert_convert_examples_to_features(
     examples,
     tokenizer,
@@ -108,112 +204,29 @@ def dcbert_convert_examples_to_features(
 
     """
     logging.info('converting features with dcbert')
-    label_map = {label: i for i, label in enumerate(label_list)}
-
     features = []
-    for (ex_index, example) in enumerate(examples):
-        len_examples = len(examples)
-        if ex_index % 10000 == 0:
-            logger.info("Writing example %d/%d" % (ex_index, len_examples))
-
-        inputs = tokenizer.encode_plus(example.text_a, example.text_b, add_special_tokens=True, max_length=max_length,)
-        input_ids, token_type_ids = inputs["input_ids"], inputs["token_type_ids"]
-
-        inputs_a = tokenizer.encode_plus(example.text_a, max_length=max_length_a,)
-        input_ids_a, token_type_ids_a = inputs_a["input_ids"], inputs_a["token_type_ids"]
-
-        inputs_b = tokenizer.encode_plus(example.text_b, max_length=max_length_b,)
-        input_ids_b, token_type_ids_b = inputs_b["input_ids"], inputs_b["token_type_ids"]
-
-        # The mask has 1 for real tokens and 0 for padding tokens. Only real
-        # tokens are attended to.
-        attention_mask = [1 if mask_padding_with_zero else 0] * len(input_ids)
-        attention_mask_a = [1 if mask_padding_with_zero else 0] * len(input_ids_a)
-        attention_mask_b = [1 if mask_padding_with_zero else 0] * len(input_ids_b)
-
-        # Zero-pad up to the sequence length.
-        padding_length = max_length - len(input_ids)
-        padding_length_a = max_length_a - len(input_ids_a)
-        padding_length_b = max_length_b - len(input_ids_b)
-        if pad_on_left:
-            input_ids = ([pad_token] * padding_length) + input_ids
-            attention_mask = ([0 if mask_padding_with_zero else 1] * padding_length) + attention_mask
-            token_type_ids = ([pad_token_segment_id] * padding_length) + token_type_ids
-
-            input_ids_a = ([pad_token] * padding_length_a) + input_ids_a
-            attention_mask_a = ([0 if mask_padding_with_zero else 1] * padding_length_a) + attention_mask_a
-            token_type_ids_a = ([pad_token_segment_id] * padding_length_a) + token_type_ids_a
-
-            input_ids_b = ([pad_token] * padding_length_b) + input_ids_b
-            attention_mask_b = ([0 if mask_padding_with_zero else 1] * padding_length_b) + attention_mask_b
-            token_type_ids_b = ([pad_token_segment_id] * padding_length_b) + token_type_ids_b
-        else:
-            input_ids = input_ids + ([pad_token] * padding_length)
-            attention_mask = attention_mask + ([0 if mask_padding_with_zero else 1] * padding_length)
-            token_type_ids = token_type_ids + ([pad_token_segment_id] * padding_length)
-
-            input_ids_a = input_ids_a + ([pad_token] * padding_length_a)
-            attention_mask_a = attention_mask_a + ([0 if mask_padding_with_zero else 1] * padding_length_a)
-            token_type_ids_a = token_type_ids_a + ([pad_token_segment_id] * padding_length_a)
-
-            input_ids_b = input_ids_b + ([pad_token] * padding_length_b)
-            attention_mask_b = attention_mask_b + ([0 if mask_padding_with_zero else 1] * padding_length_b)
-            token_type_ids_b = token_type_ids_b + ([pad_token_segment_id] * padding_length_b)
-
-        assert len(input_ids) == max_length, "Error with input length {} vs {}".format(len(input_ids), max_length)
-        assert len(attention_mask) == max_length, "Error with input length {} vs {}".format(
-            len(attention_mask), max_length
+    with Pool(cpu_count()) as p:
+        annotate_ = partial(
+            dcbert_convert_examples_to_feature,
+            tokenizer=tokenizer,
+            max_length=max_length,
+            task=task,
+            label_list=label_list,
+            output_mode=output_mode,
+            pad_on_left=pad_on_left,
+            pad_token=pad_token,
+            pad_token_segment_id=pad_token_segment_id,
+            mask_padding_with_zero=mask_padding_with_zero,
+            max_length_a=max_length_a,
+            max_length_b=max_length_b,
         )
-        assert len(token_type_ids) == max_length, "Error with input length {} vs {}".format(
-            len(token_type_ids), max_length
+        features = list(
+            tqdm(
+                p.imap(annotate_, examples, chunksize=32),
+                total=len(examples),
+                desc="convert {} examples".format(task),
+            )
         )
-
-        assert len(input_ids_a) == max_length_a, "Error with input length {} vs {}".format(len(input_ids_a), max_length_a)
-        assert len(attention_mask_a) == max_length_a, "Error with input length {} vs {}".format(
-            len(attention_mask_a), max_length_a
-        )
-        assert len(token_type_ids_a) == max_length_a, "Error with input length {} vs {}".format(
-            len(token_type_ids_a), max_length_a
-        )
-
-        assert len(input_ids_b) == max_length_b, "Error with input length {} vs {}".format(len(input_ids_b), max_length_b)
-        assert len(attention_mask_b) == max_length_b, "Error with input length {} vs {}".format(
-            len(attention_mask_b), max_length_b
-        )
-        assert len(token_type_ids_b) == max_length_b, "Error with input length {} vs {}".format(
-            len(token_type_ids_b), max_length_b
-        )
-
-        if output_mode == "classification":
-            label = label_map[example.label]
-        elif output_mode == "regression":
-            label = float(example.label)
-        else:
-            raise KeyError(output_mode)
-
-        if ex_index < 5:
-            logger.info("*** Example ***")
-            logger.info("guid: %s" % (example.guid))
-            logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-            logger.info("attention_mask: %s" % " ".join([str(x) for x in attention_mask]))
-            logger.info("token_type_ids: %s" % " ".join([str(x) for x in token_type_ids]))
-
-            logger.info("input_ids_a: %s" % " ".join([str(x) for x in input_ids_a]))
-            logger.info("attention_mask_a: %s" % " ".join([str(x) for x in attention_mask_a]))
-            logger.info("token_type_ids_a: %s" % " ".join([str(x) for x in token_type_ids_a]))
-
-            logger.info("input_ids_b: %s" % " ".join([str(x) for x in input_ids_b]))
-            logger.info("attention_mask_b: %s" % " ".join([str(x) for x in attention_mask_b]))
-            logger.info("token_type_ids_b: %s" % " ".join([str(x) for x in token_type_ids_b]))
-            logger.info("label: %s (id = %d)" % (example.label, label))
-
-        features.append(
-            DCInputFeatures(
-                input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids,
-                input_ids_a=input_ids_a, attention_mask_a=attention_mask_a, token_type_ids_a=token_type_ids_a,
-                 input_ids_b=input_ids_b, attention_mask_b=attention_mask_b, token_type_ids_b=token_type_ids_b, label=label
-            ))
-
     return features
 
 
@@ -256,7 +269,7 @@ class Sst2Processor(DataProcessor):
             examples.append(InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
         return examples
 
-class HotpotProcessor(DataProcessor):
+class RankerProcessor(DataProcessor):
     """Processor for the WNLI data set (GLUE version)."""
     def _read_json_line(self, file_path):
         data = []
@@ -305,7 +318,7 @@ class HotpotProcessor(DataProcessor):
             #     break
         return examples
 
-class HotpotSFProcessor(HotpotProcessor):
+class HotpotSFProcessor(RankerProcessor):
     """Processor for the WNLI data set (GLUE version)."""
 
     def get_train_examples(self, data_dir):
@@ -320,7 +333,7 @@ class HotpotSFProcessor(HotpotProcessor):
         """See base class."""
         return ["0", "1"]
 
-class HotpotYesNoProcessor(HotpotProcessor):
+class HotpotYesNoProcessor(RankerProcessor):
     """Processor for the WNLI data set (GLUE version)."""
 
     def get_train_examples(self, data_dir, nsp=1.0):
@@ -334,7 +347,7 @@ class HotpotYesNoProcessor(HotpotProcessor):
     def get_labels(self):
         """See base class."""
         return ["0", "1", "2"]
-class Hotpot2ndNoProcessor(HotpotProcessor):
+class Hotpot2ndNoProcessor(RankerProcessor):
     """Processor for the WNLI data set (GLUE version)."""
 
     def get_train_examples(self, data_dir, nsp=1.0):
@@ -351,7 +364,7 @@ class Hotpot2ndNoProcessor(HotpotProcessor):
 
 
 hotpot_tasks_num_labels = {
-    "hotpot": 2,
+    "ranker": 2,
     "hotpot_sf": 2,
     "hotpot_yes_no": 3,
     "hotpot_2nd": 2,
@@ -359,7 +372,7 @@ hotpot_tasks_num_labels = {
 }
 
 hotpot_processors = {
-    "hotpot": HotpotProcessor,
+    "ranker": RankerProcessor,
     "hotpot_sf": HotpotSFProcessor,
     "hotpot_yes_no": HotpotYesNoProcessor,
     "hotpot_2nd": Hotpot2ndNoProcessor,
@@ -367,7 +380,7 @@ hotpot_processors = {
 }
 
 hotpot_output_modes = {
-    "hotpot": "classification",
+    "ranker": "classification",
     "hotpot_sf": "classification",
     "hotpot_yes_no": "classification",
     "hotpot_2nd": "classification",
@@ -377,7 +390,7 @@ hotpot_output_modes = {
 
 def hotpot_compute_metrics(task_name, preds, labels):
     assert len(preds) == len(labels)
-    if task_name == "hotpot":
+    if task_name == "ranker":
         return {"result": precision_recall_fscore_support(y_pred=preds, y_true=labels)}
     elif task_name == "hotpot_sf":
         return {"result": precision_recall_fscore_support(y_pred=preds, y_true=labels)}

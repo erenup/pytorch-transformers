@@ -140,6 +140,7 @@ elif args.convert_option == 'txt_to_qa':
         paragraph['qas'] = [qa]
         paragraphs = [paragraph]
         article['paragraphs'] = paragraphs
+        article['title'] = 'combined from top {}'.format(top_n)
         squad_qa['data'].append(article)
     print('topn {} tfidf recall {}'.format(top_n, has_answer_tfidf * 1.0 /total_cnt))
     print('top {} recall: {}'.format(top_n, has_answer * 1.0 / total_cnt))

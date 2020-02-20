@@ -63,7 +63,7 @@ from transformers import glue_convert_examples_to_features as convert_examples_t
 from data_cls import hotpot_output_modes as output_modes
 from data_cls import hotpot_processors as processors
 from data_cls import dcbert_convert_examples_to_features
-from dc_bert import DCBERT
+from dc_bert import DCBERT, DistilBertForSequenceClassification
 
 
 try:
@@ -93,6 +93,7 @@ ALL_MODELS = sum(
 
 MODEL_CLASSES = {
     "dc-bert": (BertConfig, DCBERT, BertTokenizer),
+    "distil-bert-cls": (BertConfig, DistilBertForSequenceClassification, BertTokenizer),
     "bert": (BertConfig, BertForSequenceClassification, BertTokenizer),
     "xlnet": (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
     "xlm": (XLMConfig, XLMForSequenceClassification, XLMTokenizer),
@@ -216,7 +217,7 @@ def train(args, train_dataset, model, tokenizer):
             inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
             if args.model_type != "distilbert":
                 inputs["token_type_ids"] = (
-                    batch[2] if args.model_type in ["bert", "xlnet", "albert", "dc-bert"] else None
+                    batch[2] if args.model_type in ["bert", "xlnet", "albert", "dc-bert", "distil-bert-cls"] else None
                 )  # XLM, DistilBERT, RoBERTa, and XLM-RoBERTa don't use segment_ids
             if args.model_type == 'dc-bert':
                 inputs.update({
@@ -343,7 +344,7 @@ def evaluate(args, model, tokenizer, prefix=""):
                 inputs = {"input_ids": batch[0], "attention_mask": batch[1], "labels": batch[3]}
                 if args.model_type != "distilbert":
                     inputs["token_type_ids"] = (
-                        batch[2] if args.model_type in ["bert", "xlnet", "albert", "dc-bert"] else None
+                        batch[2] if args.model_type in ["bert", "xlnet", "albert", "dc-bert", "distil-bert-cls"] else None
                     )  # XLM, DistilBERT, RoBERTa, and XLM-RoBERTa don't use segment_ids
                 if args.model_type == 'dc-bert':
                     inputs.update({

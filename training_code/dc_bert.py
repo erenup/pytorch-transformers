@@ -1,8 +1,9 @@
-from transformers.modeling_bert import BertPreTrainedModel, BertModel, BertLayer, BertPooler, BertEncoder, BertConfig
+from transformers.modeling_bert import BertPreTrainedModel, BertModel, BertLayer, BertPooler, BertEncoder, BertConfig, BertForSequenceClassification
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 import torch
 import copy
+import torch.nn.functional as F
 
 class BertPoolerQD(nn.Module):
     def __init__(self, config):
@@ -92,6 +93,85 @@ class DCBERT(BertPreTrainedModel):
             else:
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+            outputs = (loss,) + outputs
+
+        return outputs  # (loss), logits, (hidden_states), (attentions)
+
+class DistilBertForSequenceClassification(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+        config.num_hidden_layers = 1
+        self.bert = BertModel(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Linear(config.hidden_size, self.config.num_labels)
+
+        self.init_weights()
+
+        self.teacher = BertForSequenceClassification.from_pretrained('/project/yzhang952/erenup/pytorch-transformers/models_bert/nq_base_uncased_bs160')
+        self.ce_loss_fct = nn.KLDivLoss(reduction="batchmean")
+        self.mse_loss_fct = nn.MSELoss(reduction="sum")
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        labels=None,
+    ):
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+        )
+        pooled_output = outputs[1]
+
+        pooled_output = self.dropout(pooled_output)
+        logits = self.classifier(pooled_output)
+
+
+
+        outputs = (logits,) + outputs[2:]  # add hidden states and attention if they are here
+
+        if labels is not None:
+            if self.num_labels == 1:
+                #  We are doing regression
+                loss_fct = MSELoss()
+                loss = loss_fct(logits.view(-1), labels.view(-1))
+            else:
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+            with torch.no_grad():
+                outputs_teacher = self.teacher(input_ids,
+                                               attention_mask=attention_mask,
+                                               token_type_ids=token_type_ids,
+                                               position_ids=position_ids,
+                                               head_mask=head_mask,
+                                               inputs_embeds=inputs_embeds, )
+                t_logits = outputs_teacher[0]
+                loss_ce = (
+                        self.ce_loss_fct(
+                            F.log_softmax(logits / 1.0, dim=-1),
+                            F.softmax(t_logits / 1.0, dim=-1),
+                        )
+                        * 1.0 ** 2
+                )
+                loss += loss_ce
+                loss_mse = self.mse_loss_fct(logits, t_logits) / logits.size(
+                    0
+                )  # Reproducing batchmean reduction
+                loss += loss_mse
+
+
+
+
             outputs = (loss,) + outputs
 
         return outputs  # (loss), logits, (hidden_states), (attentions)
