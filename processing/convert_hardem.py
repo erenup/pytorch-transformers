@@ -16,6 +16,7 @@ import argparse
 import json
 from tqdm import tqdm
 import numpy as np
+import os
 parser = argparse.ArgumentParser()
 parser.add_argument('--input', type=str)
 parser.add_argument('--output', type=str, help='')
@@ -101,8 +102,10 @@ elif args.convert_option == 'txt_to_qa':
     has_answer = 0
     has_answer_tfidf = 0
     has_answer_not_tfidf = 0
+    has_answer_not_cls = 0
     total_cnt = 0
     squad_qa = {'data': [], 'version': 'converted from txt'}
+    top_n = 5
     for squad_id, squad_question_content in tqdm(dataset.items(), desc='convert to qa format', total=len(dataset.keys())):
         total_cnt += 1
         article = {}
@@ -122,6 +125,8 @@ elif args.convert_option == 'txt_to_qa':
 
         if not topn_tfidf_positives and topn_positives:
             has_answer_not_tfidf += 1
+        if not topn_positives and topn_tfidf_positives:
+            has_answer_not_cls += 1
         if topn_tfidf_positives:
             has_answer_tfidf += 1
         if topn_positives:
@@ -139,10 +144,15 @@ elif args.convert_option == 'txt_to_qa':
     print('topn {} tfidf recall {}'.format(top_n, has_answer_tfidf * 1.0 /total_cnt))
     print('top {} recall: {}'.format(top_n, has_answer * 1.0 / total_cnt))
     print('top {} recall byond tfidf: {}'.format(top_n, has_answer_not_tfidf * 1.0 / total_cnt))
-    squad_qa['top {} recall'.format(top_n)] = has_answer * 1.0 / total_cnt
-    squad_qa['top {} recall_beyond_tfidf'.format(top_n)] = has_answer_not_tfidf * 1.0 / total_cnt
-
-    with open(args.output, 'w', encoding='utf-8') as fout:
+    print('top tfidf {} recall byond cls: {}'.format(top_n, has_answer_not_cls * 1.0 / total_cnt))
+    squad_qa['cls_recall'] = has_answer * 1.0 / total_cnt
+    squad_qa['tfidf_recall'] = has_answer_not_tfidf * 1.0 / total_cnt
+    squad_qa['tfidf_not_in_cls_recall'] = has_answer_not_cls * 1.0 / total_cnt
+    squad_qa['cls_not_in_tfidf_recall'] = has_answer_not_tfidf * 1.0 / total_cnt
+    input_dir = os.path.dirname(os.path.abspath(args.input))
+    output_file = "{}/qa.top_{}".format(input_dir, top_n)
+    print('write squad data to {}'.format(output_file))
+    with open(output_file, 'w', encoding='utf-8') as fout:
         json.dump(squad_qa, fout)
 
 elif args.convert_option == 'combine_cls_input_output':
