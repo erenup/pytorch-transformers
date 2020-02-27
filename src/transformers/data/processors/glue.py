@@ -67,11 +67,11 @@ def glue_convert_examples_to_feature(
     assert len(token_type_ids) == max_length, "Error with input length {} vs {}".format(
         len(token_type_ids), max_length
     )
-
+    label = None
     if output_mode == "classification":
-        label = label_map[example.label]
+        label = label_map.get(example.label, None)
     elif output_mode == "regression":
-        label = float(example.label)
+        label = float(example.label) if example.label is not None else None
     else:
         raise KeyError(output_mode)
 
@@ -148,7 +148,7 @@ def glue_convert_examples_to_features(
             tqdm(
                 p.imap(annotate_, examples, chunksize=32),
                 total=len(examples),
-                desc="convert {} examples".format(task),
+                desc="convert examples to features",
             )
         )
 
